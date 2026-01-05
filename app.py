@@ -2,14 +2,19 @@ import streamlit as st
 import requests
 from geopy.distance import geodesic
 import pandas as pd
+import time
 
+# ================= PAGE CONFIG =================
 st.set_page_config(page_title="Smart Tourist Planner", layout="centered")
 
-st.title("🧳 Smart Tourist Planner")
-st.write("Plan your visit by finding nearby tourist places sorted by distance")
+st.title("🌍 Smart Tourist Planner")
+st.write("City-level search for tourist places, restaurants, hotels, hospitals, fuel & bike rentals")
 
-HEADERS = {"User-Agent": "StudentProject/1.0"}
+HEADERS = {
+    "User-Agent": "SmartTouristPlanner-StudentProject"
+}
 
+# ================= LOCATION → COORDINATES =================
 def get_coordinates(place):
     url = "https://nominatim.openstreetmap.org/search"
     params = {"q": place, "format": "json", "limit": 1}
@@ -19,47 +24,68 @@ def get_coordinates(place):
         return None
     return float(data[0]["lat"]), float(data[0]["lon"])
 
-def get_attractions(lat, lon):
+# ================= SAFE OVERPASS SEARCH =================
+def get_places(lat, lon, tag_key, tag_value, radius=8000):
     query = f"""
-    [out:json];
-    node(around:3000,{lat},{lon})["tourism"="attraction"];
-    out;
+    [out:json][timeout:25];
+    node(around:{radius},{lat},{lon})["{tag_key}"="{tag_value}"];
+    out body;
     """
     try:
         res = requests.post(
             "https://overpass-api.de/api/interpreter",
             data=query,
-            headers=HEADERS,
-            timeout=30
+            headers=HEADERS
         )
-        if res.status_code != 200 or res.text.strip() == "":
+        if res.status_code != 200:
             return []
         return res.json().get("elements", [])
     except:
         return []
 
-location = st.text_input("Enter tourist location", "Tirupati")
+# ================= USER INPUT =================
+location = st.text_input("📍 Enter City / Location", "Tirupati")
 
-if st.button("Generate Travel Plan"):
-    coords = get_coordinates(location)
+if st.button("Generate City Travel Plan"):
 
-    if not coords:
-        st.error("Location not found")
-    else:
-        lat, lon = coords
-        places = get_attractions(lat, lon)
+    with st.spinner("🔍 Fetching location and city-wide data..."):
+        coords = get_coordinates(location)
 
-        if not places:
-            st.warning("No tourist places found")
+        if not coords:
+            st.error("❌ Location not found")
         else:
-            results = []
-            for p in places[:10]:
-                name = p.get("tags", {}).get("name", "Unnamed Place")
-                dist = round(
-                    geodesic((lat, lon), (p["lat"], p["lon"])).km, 2
-                )
-                results.append({"Place": name, "Distance (km)": dist})
+            lat, lon = coords
+            all_results = []
 
-            df = pd.DataFrame(results).sort_values("Distance (km)")
-            st.subheader("📍 Suggested Visit Order")
-            st.table(df.head(5))
+            categories = [
+                ("Tourist Place", "tourism", "attraction"),
+                ("Restaurant", "amenity", "restaurant"),
+                ("Hotel", "tourism", "hotel"),
+                ("Hospital", "amenity", "hospital"),
+                ("Petrol Bunk", "amenity", "fuel"),
+                ("Bike Rental", "amenity", "bicycle_rental"),
+            ]
+
+            for category, key, value in categories:
+                places = get_places(lat, lon, key, value)
+                st.write(f"✅ {category}s found:", len(places))
+
+                for p in places[:10]:   # limit for safety
+                    name = p.get("tags", {}).get("name", "Unnamed Place")
+                    dist = round(
+                        geodesic((lat, lon), (p["lat"], p["lon"])).km, 2
+                    )
+                    all_results.append({
+                        "Place": name,
+                        "Category": category,
+                        "Distance (km)": dist
+                    })
+
+                time.sleep(1)  # prevents API blocking
+
+            if not all_results:
+                st.warning("⚠️ Data could not be loaded due to map API limits. Please try again.")
+            else:
+                df = pd.DataFrame(all_results).sort_values("Distance (km)")
+                st.subheader("📊 City-wide Places (Sorted by Distance)")
+                st.dataframe(df, use_container_width=True)
